@@ -1,0 +1,16 @@
+{
+  "$schema": "https://rork.com/schema/rork.json",
+  "apps": [
+    {
+      "name": "Kochi Prayer Notifier",
+      "path": "expo",
+      "framework": "react-native"
+    },
+    {
+      "name": "Kochi Prayer Notifier",
+      "path": "expo",
+      "framework": "react-native"
+    }
+  ]
+}
+
