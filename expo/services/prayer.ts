@@ -132,6 +132,19 @@ export function buildPrayerDate(time: string, referenceDate: Date = new Date()):
   return prayerDate;
 }
 
+export function formatPrayerTime12Hour(time: string): string {
+  const match = time.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return time;
+  }
+
+  const parsedHours = Number(match[1]);
+  const minutes = match[2];
+  const suffix = parsedHours >= 12 ? 'PM' : 'AM';
+  const normalizedHours = parsedHours % 12 || 12;
+  return `${normalizedHours}:${minutes} ${suffix}`;
+}
+
 export function getNextPrayer(data: StoredPrayerData | null, now: Date = new Date()): { name: PrayerName; time: string } | null {
   if (!data) {
     return null;
@@ -146,4 +159,3 @@ export function getNextPrayer(data: StoredPrayerData | null, now: Date = new Dat
 
   return { name: 'Fajr', time: data.timings.Fajr };
 }
-
