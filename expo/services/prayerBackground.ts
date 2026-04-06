@@ -154,6 +154,60 @@ export async function schedulePrayerNotifications(data: StoredPrayerData): Promi
   console.log('Scheduled prayer notifications', scheduledIds);
 }
 
+export async function sendTestNotificationNowAsync(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    console.log('Immediate test notification skipped on web');
+    return null;
+  }
+
+  await ensureAndroidChannelAsync();
+  console.log('Sending immediate test notification');
+
+  return Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Prayer Time',
+      body: 'Test Notification',
+      sound: false,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      data: {
+        prayerName: 'Test',
+        triggerTime: new Date().toISOString(),
+      },
+    },
+    trigger: null,
+  });
+}
+
+export async function scheduleTestNotificationAfterOneMinuteAsync(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    console.log('Delayed test notification skipped on web');
+    return null;
+  }
+
+  await ensureAndroidChannelAsync();
+
+  const triggerDate = new Date(Date.now() + 60 * 1000);
+  console.log('Scheduling test notification for', triggerDate.toISOString());
+
+  return Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Prayer Time',
+      body: 'Test Notification',
+      sound: false,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
+      data: {
+        prayerName: 'Test',
+        triggerTime: triggerDate.toISOString(),
+      },
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      channelId: Platform.OS === 'android' ? ANDROID_CHANNEL_ID : undefined,
+      date: triggerDate,
+    },
+  });
+}
+
 async function scheduleSinglePrayerNotification(prayerName: PrayerName, triggerDate: Date, dateKey: string): Promise<string> {
   const identifier = `${dateKey}-${prayerName}`;
   await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => undefined);
@@ -177,4 +231,3 @@ async function scheduleSinglePrayerNotification(prayerName: PrayerName, triggerD
     },
   });
 }
-
