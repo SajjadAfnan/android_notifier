@@ -12,15 +12,21 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, Clock3, CloudMoon, RefreshCw } from 'lucide-react-native';
+import { Bell, Clock3, CloudMoon, RefreshCw, Send, TimerReset } from 'lucide-react-native';
 
 import {
+  formatPrayerTime12Hour,
   getNextPrayer,
   getOrRefreshPrayerData,
   PRAYER_NAMES,
   type StoredPrayerData,
 } from '@/services/prayer';
-import { schedulePrayerNotifications, setupPrayerNotifierAsync } from '@/services/prayerBackground';
+import {
+  schedulePrayerNotifications,
+  scheduleTestNotificationAfterOneMinuteAsync,
+  sendTestNotificationNowAsync,
+  setupPrayerNotifierAsync,
+} from '@/services/prayerBackground';
 
 interface SetupResult {
   prayerData: StoredPrayerData | null;
@@ -42,9 +48,9 @@ function formatLastUpdated(timestamp: number | null): string {
 
 function getClockLabel(date: Date): string {
   return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
-    hour12: false,
+    hour12: true,
   }).format(date);
 }
 
@@ -65,6 +71,14 @@ export default function HomeScreen() {
       }
       return prayerData;
     },
+  });
+
+  const sendNowMutation = useMutation<string | null>({
+    mutationFn: () => sendTestNotificationNowAsync(),
+  });
+
+  const scheduleTestMutation = useMutation<string | null>({
+    mutationFn: () => scheduleTestNotificationAfterOneMinuteAsync(),
   });
 
   useEffect(() => {
@@ -130,6 +144,44 @@ export default function HomeScreen() {
             </View>
           </View>
 
+          <View style={styles.testActionsCard} testID="test-actions-card">
+            <Text style={styles.listTitle}>Test notifications</Text>
+            <View style={styles.testActionsRow}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={sendNowMutation.isPending || Platform.OS === 'web'}
+                onPress={() => sendNowMutation.mutate()}
+                style={({ pressed }) => [
+                  styles.testButton,
+                  styles.testButtonPrimary,
+                  (pressed || sendNowMutation.isPending || Platform.OS === 'web') ? styles.testButtonPressed : null,
+                ]}
+                testID="send-now-button"
+              >
+                <Send color="#03111B" size={16} />
+                <Text style={styles.testButtonPrimaryText}>{sendNowMutation.isPending ? 'Sending…' : 'Send now'}</Text>
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                disabled={scheduleTestMutation.isPending || Platform.OS === 'web'}
+                onPress={() => scheduleTestMutation.mutate()}
+                style={({ pressed }) => [
+                  styles.testButton,
+                  styles.testButtonSecondary,
+                  (pressed || scheduleTestMutation.isPending || Platform.OS === 'web') ? styles.testButtonPressed : null,
+                ]}
+                testID="schedule-one-minute-button"
+              >
+                <TimerReset color="#CFFAFE" size={16} />
+                <Text style={styles.testButtonSecondaryText}>{scheduleTestMutation.isPending ? 'Scheduling…' : 'Schedule after 1 min'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.testActionsHint}>
+              {Platform.OS === 'web' ? 'Test notifications are available on Android devices.' : 'Both buttons send a test notification.'}
+            </Text>
+          </View>
+
           <View style={styles.statusRow}>
             <View style={styles.statusCard} testID="sync-status-card">
               <Text style={styles.statusLabel}>Last sync</Text>
@@ -149,13 +201,13 @@ export default function HomeScreen() {
               <Text style={styles.nextPrayerLabel}>Next prayer</Text>
             </View>
             <Text style={styles.nextPrayerName}>{nextPrayer?.name ?? 'Loading'}</Text>
-            <Text style={styles.nextPrayerTime}>{nextPrayer?.time ?? '--:--'}</Text>
+            <Text style={styles.nextPrayerTime}>{nextPrayer ? formatPrayerTime12Hour(nextPrayer.time) : '--:--'}</Text>
           </View>
 
           <View style={styles.listCard} testID="prayer-times-card">
             <Text style={styles.listTitle}>Today&apos;s stored prayer times</Text>
             {PRAYER_NAMES.map((prayerName) => {
-              const prayerTime = prayerData?.timings[prayerName] ?? '--:--';
+              const prayerTime = prayerData?.timings[prayerName] ? formatPrayerTime12Hour(prayerData.timings[prayerName]) : '--:--';
               const isNextPrayer = nextPrayer?.name === prayerName;
 
               return (
@@ -290,6 +342,53 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  testActionsCard: {
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: 'rgba(7, 24, 34, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.14)',
+    gap: 14,
+  },
+  testActionsRow: {
+    gap: 12,
+  },
+  testButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  testButtonPrimary: {
+    backgroundColor: '#86EFAC',
+  },
+  testButtonSecondary: {
+    backgroundColor: 'rgba(14, 116, 144, 0.32)',
+    borderWidth: 1,
+    borderColor: 'rgba(125, 211, 252, 0.22)',
+  },
+  testButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.99 }],
+  },
+  testButtonPrimaryText: {
+    color: '#03111B',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  testButtonSecondaryText: {
+    color: '#E0F2FE',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  testActionsHint: {
+    color: '#9FB4C0',
+    fontSize: 13,
+    lineHeight: 19,
+  },
   statusRow: {
     flexDirection: 'row',
     gap: 12,
@@ -412,4 +511,3 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
 });
-
