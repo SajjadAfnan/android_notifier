@@ -16,10 +16,11 @@ import {
 
 export const PRAYER_SYNC_TASK = 'kochi-prayer-sync-task';
 const ANDROID_CHANNEL_ID = 'prayer-alerts';
+type Period = 'AM' | 'PM';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge: false,
     shouldShowBanner: true,
     shouldShowList: true,
@@ -79,10 +80,13 @@ async function ensureAndroidChannelAsync(): Promise<void> {
 
   await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
     name: 'Prayer Alerts',
-    importance: Notifications.AndroidImportance.HIGH,
-    sound: null,
-    vibrationPattern: [0],
+    importance: Notifications.AndroidImportance.MAX,
+    sound: 'default',
+    vibrationPattern: [0, 250, 250, 250],
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    bypassDnd: false,
+    enableLights: true,
+    enableVibrate: true,
   });
 }
 
@@ -167,8 +171,9 @@ export async function sendTestNotificationNowAsync(): Promise<string | null> {
     content: {
       title: 'Prayer Time',
       body: 'Test Notification',
-      sound: false,
-      priority: Notifications.AndroidNotificationPriority.HIGH,
+      sound: 'default',
+      priority: Notifications.AndroidNotificationPriority.MAX,
+      sticky: false,
       data: {
         prayerName: 'Test',
         triggerTime: new Date().toISOString(),
@@ -184,17 +189,59 @@ export async function scheduleTestNotificationAfterOneMinuteAsync(): Promise<str
     return null;
   }
 
-  await ensureAndroidChannelAsync();
-
   const triggerDate = new Date(Date.now() + 60 * 1000);
-  console.log('Scheduling test notification for', triggerDate.toISOString());
+  return scheduleNotificationAtDateAsync('Test Notification', triggerDate, 'test-1-minute');
+}
+
+export async function scheduleCustomTestNotificationAsync(hour: string, minute: string, period: Period): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    console.log('Custom test notification skipped on web');
+    return null;
+  }
+
+  const parsedHour = Number(hour);
+  const parsedMinute = Number(minute);
+
+  if (!Number.isInteger(parsedHour) || parsedHour < 1 || parsedHour > 12) {
+    throw new Error('Enter hour from 1 to 12');
+  }
+
+  if (!Number.isInteger(parsedMinute) || parsedMinute < 0 || parsedMinute > 59) {
+    throw new Error('Enter minute from 00 to 59');
+  }
+
+  const triggerDate = buildCustomTriggerDate(parsedHour, parsedMinute, period);
+  return scheduleNotificationAtDateAsync(`Test Notification at ${hour.padStart(2, '0')}:${minute.padStart(2, '0')} ${period}`, triggerDate, 'test-custom');
+}
+
+function buildCustomTriggerDate(hour: number, minute: number, period: Period): Date {
+  const now = new Date();
+  const normalizedHour = hour % 12;
+  const hours24 = period === 'PM' ? normalizedHour + 12 : normalizedHour;
+  const triggerDate = new Date(now);
+
+  triggerDate.setHours(hours24, minute, 0, 0);
+
+  if (triggerDate.getTime() <= now.getTime()) {
+    triggerDate.setDate(triggerDate.getDate() + 1);
+  }
+
+  return triggerDate;
+}
+
+async function scheduleNotificationAtDateAsync(body: string, triggerDate: Date, identifier: string): Promise<string> {
+  await ensureAndroidChannelAsync();
+  console.log('Scheduling notification for', triggerDate.toISOString(), identifier);
+  await Notifications.cancelScheduledNotificationAsync(identifier).catch(() => undefined);
 
   return Notifications.scheduleNotificationAsync({
+    identifier,
     content: {
       title: 'Prayer Time',
-      body: 'Test Notification',
-      sound: false,
-      priority: Notifications.AndroidNotificationPriority.HIGH,
+      body,
+      sound: 'default',
+      priority: Notifications.AndroidNotificationPriority.MAX,
+      sticky: false,
       data: {
         prayerName: 'Test',
         triggerTime: triggerDate.toISOString(),
@@ -217,8 +264,9 @@ async function scheduleSinglePrayerNotification(prayerName: PrayerName, triggerD
     content: {
       title: 'Prayer Time',
       body: `${prayerName} Time`,
-      sound: false,
-      priority: Notifications.AndroidNotificationPriority.HIGH,
+      sound: 'default',
+      priority: Notifications.AndroidNotificationPriority.MAX,
+      sticky: false,
       data: {
         prayerName,
         triggerTime: triggerDate.toISOString(),
