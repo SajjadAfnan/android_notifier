@@ -1,5 +1,4 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -9,10 +8,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, Clock3, CloudMoon, RefreshCw, Send, TimerReset } from 'lucide-react-native';
 
 import {
   formatPrayerTime12Hour,
@@ -22,6 +21,7 @@ import {
   type StoredPrayerData,
 } from '@/services/prayer';
 import {
+  scheduleCustomTestNotificationAsync,
   schedulePrayerNotifications,
   scheduleTestNotificationAfterOneMinuteAsync,
   sendTestNotificationNowAsync,
@@ -33,29 +33,31 @@ interface SetupResult {
   permissionGranted: boolean;
 }
 
+type Period = 'AM' | 'PM';
+
 function formatLastUpdated(timestamp: number | null): string {
   if (!timestamp) {
     return 'Waiting for first sync';
   }
 
   return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
+    hour12: true,
     day: 'numeric',
     month: 'short',
   }).format(new Date(timestamp));
 }
 
-function getClockLabel(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(date);
+function sanitizeNumberInput(value: string, maxLength: number): string {
+  return value.replace(/\D/g, '').slice(0, maxLength);
 }
 
 export default function HomeScreen() {
   const [now, setNow] = useState<Date>(new Date());
+  const [customHour, setCustomHour] = useState<string>('10');
+  const [customMinute, setCustomMinute] = useState<string>('00');
+  const [customPeriod, setCustomPeriod] = useState<Period>('AM');
 
   const setupQuery = useQuery<SetupResult>({
     queryKey: ['kochi-prayer-notifier'],
@@ -77,8 +79,12 @@ export default function HomeScreen() {
     mutationFn: () => sendTestNotificationNowAsync(),
   });
 
-  const scheduleTestMutation = useMutation<string | null>({
+  const scheduleOneMinuteMutation = useMutation<string | null>({
     mutationFn: () => scheduleTestNotificationAfterOneMinuteAsync(),
+  });
+
+  const scheduleCustomMutation = useMutation<string | null, Error, { hour: string; minute: string; period: Period }>({
+    mutationFn: ({ hour, minute, period }) => scheduleCustomTestNotificationAsync(hour, minute, period),
   });
 
   useEffect(() => {
@@ -93,421 +99,250 @@ export default function HomeScreen() {
 
   const prayerData = refreshMutation.data ?? setupQuery.data?.prayerData ?? null;
   const nextPrayer = useMemo(() => getNextPrayer(prayerData, now), [prayerData, now]);
-  const isBusy = setupQuery.isLoading || refreshMutation.isPending;
   const permissionGranted = setupQuery.data?.permissionGranted ?? false;
   const refreshError = refreshMutation.error instanceof Error ? refreshMutation.error.message : null;
   const setupError = setupQuery.error instanceof Error ? setupQuery.error.message : null;
-  const activeError = refreshError ?? setupError;
+  const customError = scheduleCustomMutation.error instanceof Error ? scheduleCustomMutation.error.message : null;
+  const activeError = refreshError ?? setupError ?? customError;
 
   return (
-    <View style={styles.screen} testID="home-screen">
-      <LinearGradient
-        colors={['#03111B', '#0B2233', '#123B48']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <View style={styles.glowTop} pointerEvents="none" />
-      <View style={styles.glowBottom} pointerEvents="none" />
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']} testID="home-screen">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshMutation.isPending} onRefresh={() => refreshMutation.mutate()} />}
+        testID="prayer-scroll-view"
+      >
+        <Text style={styles.title}>Prayer Notifier Running</Text>
+        <Text style={styles.text}>Kochi, India</Text>
+        <Text style={styles.text}>Current time: {formatLastUpdated(now.getTime())}</Text>
+        <Text style={styles.text}>Notifications: {Platform.OS === 'web' ? 'Preview only' : permissionGranted ? 'Enabled' : 'Permission needed'}</Text>
+        <Text style={styles.text}>Last sync: {formatLastUpdated(prayerData?.fetchedAt ?? null)}</Text>
+        <Text style={styles.text} testID="next-prayer-text">
+          Next prayer: {nextPrayer ? `${nextPrayer.name} - ${formatPrayerTime12Hour(nextPrayer.time)}` : 'Loading'}
+        </Text>
 
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <ScrollView
-          testID="prayer-scroll-view"
-          contentContainerStyle={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshMutation.isPending} onRefresh={() => refreshMutation.mutate()} />}
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => refreshMutation.mutate()}
+          style={({ pressed }) => [styles.button, pressed ? styles.buttonPressed : null]}
+          testID="refresh-button"
         >
-          <View style={styles.heroCard} testID="hero-card">
-            <View style={styles.heroBadge}>
-              <Bell color="#7DD3FC" size={16} />
-              <Text style={styles.heroBadgeText}>Kochi, India</Text>
+          {refreshMutation.isPending ? <ActivityIndicator color="#ffffff" size="small" /> : <Text style={styles.buttonText}>Refresh prayer times</Text>}
+        </Pressable>
+
+        <Text style={styles.sectionTitle}>Test notifications</Text>
+
+        <Pressable
+          accessibilityRole="button"
+          disabled={sendNowMutation.isPending || Platform.OS === 'web'}
+          onPress={() => sendNowMutation.mutate()}
+          style={({ pressed }) => [styles.button, styles.secondaryButton, (pressed || sendNowMutation.isPending || Platform.OS === 'web') ? styles.buttonPressed : null]}
+          testID="send-now-button"
+        >
+          <Text style={styles.buttonText}>{sendNowMutation.isPending ? 'Sending...' : 'Send now'}</Text>
+        </Pressable>
+
+        <Pressable
+          accessibilityRole="button"
+          disabled={scheduleOneMinuteMutation.isPending || Platform.OS === 'web'}
+          onPress={() => scheduleOneMinuteMutation.mutate()}
+          style={({ pressed }) => [styles.button, styles.secondaryButton, (pressed || scheduleOneMinuteMutation.isPending || Platform.OS === 'web') ? styles.buttonPressed : null]}
+          testID="schedule-one-minute-button"
+        >
+          <Text style={styles.buttonText}>{scheduleOneMinuteMutation.isPending ? 'Scheduling...' : 'Schedule after 1 min'}</Text>
+        </Pressable>
+
+        <View style={styles.customSection} testID="custom-time-section">
+          <Text style={styles.sectionTitle}>Schedule custom test time</Text>
+          <View style={styles.timeRow}>
+            <TextInput
+              keyboardType="number-pad"
+              onChangeText={(value) => setCustomHour(sanitizeNumberInput(value, 2))}
+              placeholder="HH"
+              placeholderTextColor="#666666"
+              style={styles.input}
+              testID="custom-hour-input"
+              value={customHour}
+            />
+            <Text style={styles.colon}>:</Text>
+            <TextInput
+              keyboardType="number-pad"
+              onChangeText={(value) => setCustomMinute(sanitizeNumberInput(value, 2))}
+              placeholder="MM"
+              placeholderTextColor="#666666"
+              style={styles.input}
+              testID="custom-minute-input"
+              value={customMinute}
+            />
+            <View style={styles.periodRow}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCustomPeriod('AM')}
+                style={({ pressed }) => [styles.periodButton, customPeriod === 'AM' ? styles.periodButtonActive : null, pressed ? styles.buttonPressed : null]}
+                testID="custom-period-am"
+              >
+                <Text style={[styles.periodText, customPeriod === 'AM' ? styles.periodTextActive : null]}>AM</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setCustomPeriod('PM')}
+                style={({ pressed }) => [styles.periodButton, customPeriod === 'PM' ? styles.periodButtonActive : null, pressed ? styles.buttonPressed : null]}
+                testID="custom-period-pm"
+              >
+                <Text style={[styles.periodText, customPeriod === 'PM' ? styles.periodTextActive : null]}>PM</Text>
+              </Pressable>
             </View>
+          </View>
 
-            <Text style={styles.title}>Prayer Notifier Running</Text>
-            <Text style={styles.subtitle}>
-              Fetches prayer times once per day, stores them locally, and schedules silent alerts for Fajr, Dhuhr, Asr, Maghrib, and Isha.
-            </Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={scheduleCustomMutation.isPending || Platform.OS === 'web'}
+            onPress={() => scheduleCustomMutation.mutate({ hour: customHour, minute: customMinute, period: customPeriod })}
+            style={({ pressed }) => [styles.button, styles.secondaryButton, (pressed || scheduleCustomMutation.isPending || Platform.OS === 'web') ? styles.buttonPressed : null]}
+            testID="schedule-custom-button"
+          >
+            <Text style={styles.buttonText}>{scheduleCustomMutation.isPending ? 'Scheduling...' : 'Schedule custom time'}</Text>
+          </Pressable>
+        </View>
 
-            <View style={styles.heroFooter}>
-              <View style={styles.heroMeta}>
-                <Clock3 color="#CFFAFE" size={16} />
-                <Text style={styles.heroMetaText}>{getClockLabel(now)}</Text>
+        <View style={styles.list} testID="prayer-times-card">
+          {PRAYER_NAMES.map((prayerName) => {
+            const prayerTime = prayerData?.timings[prayerName] ? formatPrayerTime12Hour(prayerData.timings[prayerName]) : '--:--';
+            return (
+              <View key={prayerName} style={styles.row} testID={`prayer-row-${prayerName}`}>
+                <Text style={styles.rowLabel}>{prayerName}</Text>
+                <Text style={styles.rowValue}>{prayerTime}</Text>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => refreshMutation.mutate()}
-                style={({ pressed }) => [styles.refreshButton, pressed ? styles.refreshButtonPressed : null]}
-                testID="refresh-button"
-              >
-                {refreshMutation.isPending ? <ActivityIndicator color="#03111B" size="small" /> : <RefreshCw color="#03111B" size={16} />}
-                <Text style={styles.refreshButtonText}>Refresh</Text>
-              </Pressable>
-            </View>
-          </View>
+            );
+          })}
+        </View>
 
-          <View style={styles.testActionsCard} testID="test-actions-card">
-            <Text style={styles.listTitle}>Test notifications</Text>
-            <View style={styles.testActionsRow}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={sendNowMutation.isPending || Platform.OS === 'web'}
-                onPress={() => sendNowMutation.mutate()}
-                style={({ pressed }) => [
-                  styles.testButton,
-                  styles.testButtonPrimary,
-                  (pressed || sendNowMutation.isPending || Platform.OS === 'web') ? styles.testButtonPressed : null,
-                ]}
-                testID="send-now-button"
-              >
-                <Send color="#03111B" size={16} />
-                <Text style={styles.testButtonPrimaryText}>{sendNowMutation.isPending ? 'Sending…' : 'Send now'}</Text>
-              </Pressable>
-
-              <Pressable
-                accessibilityRole="button"
-                disabled={scheduleTestMutation.isPending || Platform.OS === 'web'}
-                onPress={() => scheduleTestMutation.mutate()}
-                style={({ pressed }) => [
-                  styles.testButton,
-                  styles.testButtonSecondary,
-                  (pressed || scheduleTestMutation.isPending || Platform.OS === 'web') ? styles.testButtonPressed : null,
-                ]}
-                testID="schedule-one-minute-button"
-              >
-                <TimerReset color="#CFFAFE" size={16} />
-                <Text style={styles.testButtonSecondaryText}>{scheduleTestMutation.isPending ? 'Scheduling…' : 'Schedule after 1 min'}</Text>
-              </Pressable>
-            </View>
-            <Text style={styles.testActionsHint}>
-              {Platform.OS === 'web' ? 'Test notifications are available on Android devices.' : 'Both buttons send a test notification.'}
-            </Text>
-          </View>
-
-          <View style={styles.statusRow}>
-            <View style={styles.statusCard} testID="sync-status-card">
-              <Text style={styles.statusLabel}>Last sync</Text>
-              <Text style={styles.statusValue}>{formatLastUpdated(prayerData?.fetchedAt ?? null)}</Text>
-            </View>
-            <View style={styles.statusCard} testID="notifications-status-card">
-              <Text style={styles.statusLabel}>Notifications</Text>
-              <Text style={styles.statusValue}>
-                {Platform.OS === 'web' ? 'Preview only' : permissionGranted ? 'Enabled' : 'Permission needed'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.nextPrayerCard} testID="next-prayer-card">
-            <View style={styles.nextPrayerHeader}>
-              <CloudMoon color="#86EFAC" size={18} />
-              <Text style={styles.nextPrayerLabel}>Next prayer</Text>
-            </View>
-            <Text style={styles.nextPrayerName}>{nextPrayer?.name ?? 'Loading'}</Text>
-            <Text style={styles.nextPrayerTime}>{nextPrayer ? formatPrayerTime12Hour(nextPrayer.time) : '--:--'}</Text>
-          </View>
-
-          <View style={styles.listCard} testID="prayer-times-card">
-            <Text style={styles.listTitle}>Today&apos;s stored prayer times</Text>
-            {PRAYER_NAMES.map((prayerName) => {
-              const prayerTime = prayerData?.timings[prayerName] ? formatPrayerTime12Hour(prayerData.timings[prayerName]) : '--:--';
-              const isNextPrayer = nextPrayer?.name === prayerName;
-
-              return (
-                <View key={prayerName} style={[styles.prayerRow, isNextPrayer ? styles.prayerRowActive : null]} testID={`prayer-row-${prayerName}`}>
-                  <Text style={[styles.prayerName, isNextPrayer ? styles.prayerNameActive : null]}>{prayerName}</Text>
-                  <Text style={[styles.prayerTime, isNextPrayer ? styles.prayerTimeActive : null]}>{prayerTime}</Text>
-                </View>
-              );
-            })}
-          </View>
-
-          {activeError ? (
-            <View style={styles.errorCard} testID="error-card">
-              <Text style={styles.errorTitle}>Could not refresh prayer times</Text>
-              <Text style={styles.errorText}>{activeError}</Text>
-              <Text style={styles.errorText}>The app will keep using cached times and retry on the next cycle.</Text>
-            </View>
-          ) : null}
-
-          <Text style={styles.footnote} testID="footnote-text">
-            {isBusy
-              ? 'Preparing notifier…'
-              : Platform.OS === 'web'
-                ? 'Web preview shows cached prayer times. Exact local notifications run on Android devices.'
-                : 'Alerts are scheduled locally on your device after the daily sync.'}
+        {activeError ? (
+          <Text style={styles.errorText} testID="error-card">
+            {activeError}
           </Text>
-        </ScrollView>
-      </SafeAreaView>
-    </View>
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#03111B',
-  },
   safeArea: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 28,
-    gap: 16,
-  },
-  glowTop: {
-    position: 'absolute',
-    top: -80,
-    right: -60,
-    width: 220,
-    height: 220,
-    borderRadius: 220,
-    backgroundColor: 'rgba(34, 211, 238, 0.16)',
-  },
-  glowBottom: {
-    position: 'absolute',
-    bottom: -120,
-    left: -80,
-    width: 260,
-    height: 260,
-    borderRadius: 260,
-    backgroundColor: 'rgba(74, 222, 128, 0.14)',
-  },
-  heroCard: {
-    borderRadius: 28,
-    padding: 22,
-    backgroundColor: 'rgba(8, 28, 40, 0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(125, 211, 252, 0.16)',
-    gap: 14,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(14, 116, 144, 0.28)',
-  },
-  heroBadgeText: {
-    color: '#CFFAFE',
-    fontSize: 13,
-    fontWeight: '600',
+    padding: 16,
+    gap: 12,
   },
   title: {
-    color: '#F8FAFC',
-    fontSize: 31,
-    lineHeight: 36,
-    fontWeight: '800',
-  },
-  subtitle: {
-    color: '#B6CBD8',
-    fontSize: 15,
-    lineHeight: 23,
-  },
-  heroFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  heroMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  heroMetaText: {
-    color: '#E0F2FE',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  refreshButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 999,
-    backgroundColor: '#86EFAC',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    minWidth: 116,
-  },
-  refreshButtonPressed: {
-    opacity: 0.84,
-    transform: [{ scale: 0.98 }],
-  },
-  refreshButtonText: {
-    color: '#03111B',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  testActionsCard: {
-    borderRadius: 28,
-    padding: 18,
-    backgroundColor: 'rgba(7, 24, 34, 0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    gap: 14,
-  },
-  testActionsRow: {
-    gap: 12,
-  },
-  testButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  testButtonPrimary: {
-    backgroundColor: '#86EFAC',
-  },
-  testButtonSecondary: {
-    backgroundColor: 'rgba(14, 116, 144, 0.32)',
-    borderWidth: 1,
-    borderColor: 'rgba(125, 211, 252, 0.22)',
-  },
-  testButtonPressed: {
-    opacity: 0.72,
-    transform: [{ scale: 0.99 }],
-  },
-  testButtonPrimaryText: {
-    color: '#03111B',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  testButtonSecondaryText: {
-    color: '#E0F2FE',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  testActionsHint: {
-    color: '#9FB4C0',
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statusCard: {
-    flex: 1,
-    borderRadius: 22,
-    padding: 18,
-    backgroundColor: 'rgba(7, 24, 34, 0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    gap: 8,
-  },
-  statusLabel: {
-    color: '#7DD3FC',
-    fontSize: 13,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    fontSize: 24,
     fontWeight: '700',
+    color: '#111111',
   },
-  statusValue: {
-    color: '#F8FAFC',
+  text: {
     fontSize: 16,
-    lineHeight: 22,
-    fontWeight: '700',
+    color: '#222222',
   },
-  nextPrayerCard: {
-    borderRadius: 28,
-    padding: 22,
-    backgroundColor: '#DCFCE7',
-    gap: 10,
-  },
-  nextPrayerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  nextPrayerLabel: {
-    color: '#14532D',
-    fontSize: 13,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    fontWeight: '700',
-  },
-  nextPrayerName: {
-    color: '#052E16',
-    fontSize: 30,
-    fontWeight: '800',
-  },
-  nextPrayerTime: {
-    color: '#166534',
+  sectionTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#111111',
+    marginTop: 8,
   },
-  listCard: {
-    borderRadius: 28,
-    padding: 18,
-    backgroundColor: 'rgba(7, 24, 34, 0.92)',
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    gap: 6,
-  },
-  listTitle: {
-    color: '#F8FAFC',
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  prayerRow: {
-    flexDirection: 'row',
+  button: {
+    minHeight: 48,
+    borderRadius: 8,
+    backgroundColor: '#111111',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
   },
-  prayerRowActive: {
-    backgroundColor: 'rgba(125, 211, 252, 0.12)',
+  secondaryButton: {
+    backgroundColor: '#333333',
   },
-  prayerName: {
-    color: '#D6E4EC',
+  buttonPressed: {
+    opacity: 0.7,
+  },
+  buttonText: {
+    color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
   },
-  prayerNameActive: {
-    color: '#F8FAFC',
+  customSection: {
+    gap: 12,
   },
-  prayerTime: {
-    color: '#7DD3FC',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  prayerTimeActive: {
-    color: '#86EFAC',
-  },
-  errorCard: {
-    borderRadius: 22,
-    padding: 18,
-    backgroundColor: 'rgba(69, 10, 10, 0.75)',
-    borderWidth: 1,
-    borderColor: 'rgba(248, 113, 113, 0.34)',
+  timeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
-  errorTitle: {
-    color: '#FECACA',
+  input: {
+    width: 64,
+    height: 48,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 8,
+    textAlign: 'center',
+    fontSize: 18,
+    color: '#111111',
+  },
+  colon: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#111111',
+  },
+  periodRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  periodButton: {
+    height: 48,
+    minWidth: 56,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  periodButtonActive: {
+    backgroundColor: '#111111',
+    borderColor: '#111111',
+  },
+  periodText: {
+    color: '#111111',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
+  },
+  periodTextActive: {
+    color: '#ffffff',
+  },
+  list: {
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 8,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+  },
+  rowLabel: {
+    fontSize: 16,
+    color: '#111111',
+  },
+  rowValue: {
+    fontSize: 16,
+    color: '#111111',
+    fontWeight: '600',
   },
   errorText: {
-    color: '#FEE2E2',
+    color: '#b00020',
     fontSize: 14,
-    lineHeight: 21,
-  },
-  footnote: {
-    color: '#9FB4C0',
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 4,
   },
 });
